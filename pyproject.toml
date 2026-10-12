@@ -1,0 +1,15 @@
+[project]
+name = "tesla"
+version = "0.1.0"
+description = "Recover, decrypt and watch Tesla dashcam clips (including deleted ones) from the car's USB drive"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.143.0",
+    "playwright>=1.63.0",
+    "pycryptodome>=3.24.1",
+    "pywebview>=6.2.1",
+    "requests>=2.34.2",
+    "uvicorn>=0.54.0",
+]

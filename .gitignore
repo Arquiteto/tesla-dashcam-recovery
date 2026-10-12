@@ -1,0 +1,24 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Your footage and drive data - never commit these
+recover/
+*.mp4
+*.MP4
+listing.txt
+scan*.json
+library.json
+.telemetry/
+unplayable/
+encrypted/
+
+# Local tool settings
+.claude/

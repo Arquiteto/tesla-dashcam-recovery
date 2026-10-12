@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tesla Dashcam Recovery</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">Tesla Dashcam Recovery</div>
+  <nav class="steps" id="steps">
+    <button data-step="drive">1 · Drive</button>
+    <button data-step="scan">2 · Scan</button>
+    <button data-step="select">3 · Choose clips</button>
+    <button data-step="copy">4 · Copy</button>
+    <button data-step="signin">5 · Sign in</button>
+    <button data-step="decrypt">6 · Decrypt</button>
+    <button data-step="viewer">7 · Watch</button>
+  </nav>
+  <button class="ghost" id="open-folder-btn" title="Watch clips recovered earlier">Open recovered folder…</button>
+</header>
+
+<main>
+  <!-- 1. Drive -->
+  <section class="screen" id="screen-drive">
+    <h1>Plug in the Tesla USB drive</h1>
+    <p class="lead">The drive is only read, never changed. Clips that were deleted are recovered too.</p>
+    <div id="drive-list" class="cards"></div>
+    <p class="muted" id="drive-empty">Looking for drives…</p>
+    <div class="actions"><button class="primary" id="scan-btn" disabled>Scan drive</button></div>
+  </section>
+
+  <!-- 2. Scan -->
+  <section class="screen" id="screen-scan">
+    <h1>Scanning the drive</h1>
+    <p class="lead">Looking for existing clips, deleted folder entries and leftover clips in free space.
+      This takes a few minutes.</p>
+    <div class="progress-block" id="scan-progress"></div>
+  </section>
+
+  <!-- 3. Select -->
+  <section class="screen" id="screen-select">
+    <h1>Choose what to recover</h1>
+    <p class="lead" id="select-summary"></p>
+    <div class="timeline-wrap">
+      <canvas id="timeline" height="120"></canvas>
+      <div class="legend"><span class="sw live"></span>existing <span class="sw deleted"></span>deleted
+        <span class="muted">· drag on the chart to choose a time range</span></div>
+    </div>
+    <div class="range-row">
+      <label><input type="radio" name="range" value="all" checked> All clips</label>
+      <label><input type="radio" name="range" value="range"> From
+        <input type="datetime-local" id="range-from" step="1"></label>
+      <label>to <input type="datetime-local" id="range-to" step="1"></label>
+    </div>
+    <h2>Recordings <span class="muted small">(click to choose one, shift-click to extend)</span></h2>
+    <div id="session-list" class="session-list"></div>
+    <div class="actions sticky">
+      <span id="selection-info"></span>
+      <button class="primary" id="to-copy-btn">Next: choose output folder</button>
+    </div>
+  </section>
+
+  <!-- 4. Copy -->
+  <section class="screen" id="screen-copy">
+    <h1>Copy the clips to your computer</h1>
+    <p class="lead" id="copy-summary"></p>
+    <div class="folder-row">
+      <input type="text" id="out-dir" placeholder="Output folder" spellcheck="false">
+      <button id="pick-out-btn">Browse…</button>
+    </div>
+    <div class="actions"><button class="primary" id="copy-btn">Copy clips</button></div>
+    <div class="progress-block" id="copy-progress"></div>
+  </section>
+
+  <!-- 5. Sign in -->
+  <section class="screen" id="screen-signin">
+    <h1>Sign in to Tesla</h1>
+    <p class="lead">New Tesla software encrypts clips, and Tesla gives the keys to the car's owner.
+      An Edge (or Chrome) window opens on dashcam.tesla.com: sign in there with your Tesla account,
+      solving the captcha if it asks. When you are back on the dashcam page, the window closes by itself.
+      The sign-in window remembers your Tesla login for next time; this app keeps the access token only while it is open.</p>
+    <div class="actions"><button class="primary" id="signin-btn">Open Tesla sign-in</button></div>
+    <div class="progress-block" id="signin-progress"></div>
+    <details class="manual">
+      <summary>Sign-in window not working? Paste a token instead</summary>
+      <p class="muted">On dashcam.tesla.com open DevTools → Network, pick any <code>/api/</code> request and
+        copy the value after <code>Authorization: Bearer</code>.</p>
+      <div class="folder-row"><input type="password" id="token-input" placeholder="Bearer token">
+        <button id="token-btn">Use token</button></div>
+    </details>
+  </section>
+
+  <!-- 6. Decrypt -->
+  <section class="screen" id="screen-decrypt">
+    <h1>Decrypt and name the clips</h1>
+    <p class="lead">Clips are decrypted on this computer and named by recording time, camera and location.</p>
+    <label class="check"><input type="checkbox" id="keep-encrypted" checked> Keep the encrypted copies</label>
+    <div class="actions"><button class="primary" id="decrypt-btn">Decrypt</button></div>
+    <div class="progress-block" id="decrypt-progress"></div>
+    <div id="decrypt-result"></div>
+  </section>
+
+  <!-- 7. Viewer -->
+  <section class="screen viewer" id="screen-viewer">
+    <aside class="clip-list" id="clip-list"></aside>
+    <div class="player">
+      <div class="videos grid" id="videos"></div>
+      <div class="telemetry hidden" id="telemetry">
+        <div class="tm-speed"><span id="tm-speed">0</span><small>km/h</small></div>
+        <div class="tm-gear" id="tm-gear">P</div>
+        <div class="tm-blinkers"><span id="tm-bl">◀</span><span id="tm-br">▶</span></div>
+        <div class="tm-wheel"><svg id="tm-wheel" viewBox="-20 -20 40 40"><circle r="16" fill="none" stroke="currentColor" stroke-width="4"/><path d="M-16 0 H16 M0 0 V16" stroke="currentColor" stroke-width="4"/></svg><span id="tm-steer">0°</span></div>
+        <div class="tm-pedals"><div class="bar"><div id="tm-acc"></div></div><span id="tm-brake">BRAKE</span></div>
+        <div class="tm-ap" id="tm-ap"></div>
+        <div class="tm-gps" id="tm-gps"></div>
+      </div>
+      <div class="controls">
+        <button id="prev-btn" title="Previous minute">⏮</button>
+        <button id="play-btn" title="Play / pause (space)">▶</button>
+        <button id="next-btn" title="Next minute">⏭</button>
+        <input type="range" id="seek" min="0" max="60" step="0.05" value="0">
+        <span class="clock" id="clock">--:--:--</span>
+        <select id="speed" title="Playback speed">
+          <option value="0.5">0.5×</option><option value="1" selected>1×</option>
+          <option value="2">2×</option><option value="4">4×</option>
+        </select>
+        <button id="layout-btn" title="Grid / single camera">▦</button>
+        <label class="check small"><input type="checkbox" id="tm-toggle"> Telemetry</label>
+        <button id="save-btn" title="Copy the clips of the chosen minutes to another folder">Save…</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast hidden" id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
