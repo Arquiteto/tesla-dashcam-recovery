@@ -5,6 +5,7 @@
 
 import argparse
 import ctypes
+import logging
 import os
 import socket
 import subprocess
@@ -45,7 +46,17 @@ def elevate():
     return {'ok': False}
 
 
+class _IgnoreClosedConnections(logging.Filter):
+    """The video player drops connections all the time (every seek cancels a request), and on
+    Windows asyncio logs a full traceback for each one ("WinError 10054"). They are harmless."""
+
+    def filter(self, record):
+        exc = record.exc_info[1] if record.exc_info else None
+        return not isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError))
+
+
 def main():
+    logging.getLogger('asyncio').addFilter(_IgnoreClosedConnections())
     parser = argparse.ArgumentParser(description='Tesla dashcam recovery')
     parser.add_argument('--library', help='open this folder of recovered clips in the viewer')
     parser.add_argument('--browser', action='store_true', help='use the default web browser instead of a window')

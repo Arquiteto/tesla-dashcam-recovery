@@ -37,7 +37,8 @@ The USB drive is **only read, never changed**.
 ## 1. What you need
 
 - A **Windows 10 or Windows 11** PC (macOS and Linux are not supported yet; see [section 9](#9-macos-and-linux)).
-- The **Tesla USB drive** (or SSD) and a way to plug it into the PC.
+- The **Tesla USB drive** (or SSD) and a way to plug it into the PC. Both **HW3** (4 cameras) and **HW4** (6 cameras)
+  cars are supported.
 - A **Tesla account** that the car belongs to. This is needed for clips from Tesla software 2026.20
   and newer, which are encrypted.
 - **Free disk space** on the PC. Plan on about twice the size of the clips you recover:
@@ -192,7 +193,8 @@ The six cameras play in sync, and the app moves on to the next minute automatica
 | **0.5× … 4×** | playback speed |
 | **Ctrl-click** minutes in the list, **Shift-click** for a range, then **Save…** | copy those minutes to a folder of your choice |
 
-"`3/6`" next to a minute means only 3 of the 6 cameras were recovered. Cameras marked **Side (unknown)**
+"`3/6`" next to a minute means only 3 of the 6 cameras were recovered. Cars with **HW3** record
+four cameras (no pillar cameras); their minutes are shown as a 2×2 grid, and keys **1–4** enlarge a camera. Cameras marked **Side (unknown)**
 were recovered, but the app couldn't tell which side camera they are.
 
 To watch clips you recovered earlier, click **Open recovered folder…** (top right) and choose the output folder.

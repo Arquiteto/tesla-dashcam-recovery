@@ -87,10 +87,50 @@ Windows, run from an **admin** PowerShell. Drive is `D:`, **exFAT**, 512 B secto
   stops at a bad NAL or a jump in the SEI frame counter, i.e. bytes from another clip). Constant
   278/10000 s per frame. Width/height from the SPS. On the 420 clips the old pipeline couldn't play:
   406 rebuilt (~3 h of footage), 394 matched to their minute by header end time (±5 s).
-- **Viewer sync**: never seek a video that is still seeking. Correct small drift with playbackRate ±10 %,
-  seek at most every 1.5 s. A watchdog reloads a video that stops advancing, and the tile is marked dead after 2 reloads.
+- **Viewer playback** (measured in the browser pane on recover/App3):
+  - **1×–2×:** native playback. All 6 cameras decode fine (2× ≈ 72 frames/s for the front camera).
+    Sync: never seek a video that is still seeking. Correct small drift with playbackRate ±10 %, and
+    seek at most every 1.5 s.
+  - **Above 2×:** Chromium stalls completely: the 2896-px front clip alone at 4× decodes about
+    1 frame/s and reports readyState 2 forever. `stepTick` keeps the videos paused, runs its own
+    clock, and seeks each camera to the keyframe at or before the clock (`/api/keyframes`, from
+    stss; keyframes every 0.5 s). That gives 8 pictures/s per camera at 4×.
+  - **Seek-bar dragging** also uses keyframe stepping (`scrub`/`endScrub`). Exact seeks on every
+    `input` event piled up in the decoders and froze cameras. On release it does one exact seek.
+  - **Stall watchdog:** it only re-seeks in place. Reloading added decode load, and marking tiles
+    dead froze the whole viewer. Tiles are only marked dead on real media errors.
+  - Don't wrap `/media` in a `BaseHTTPMiddleware` (it wraps streaming responses). In browser mode,
+    the tkinter folder dialog must run in a subprocess (Tk off the main thread crashed the server).
 - The token pickup needs dashcam.tesla.com to call its API, which it only does once a clip is
   opened. `auth._open_clip` feeds it one of the copied encrypted clips via the file input.
+
+- **HW3** (checked on an HW3 drive, E:, 2026-10-13): 4 cameras, `front, left_repeater, right_repeater, back`,
+  written back to back in that order (757/764 minutes). Encrypted the same way, exFAT, 128 KiB
+  clusters. Scan: 4595 clips in 143 s. The resolution is not verified yet (no decrypted HW3 clip),
+  but it is not 2896/1448. `assignCameras` treats a minute as HW4 if any clip is 2896/1448 wide or
+  a pillar; otherwise it uses the 4-camera order, and a complete 4-clip minute is assigned by
+  cluster order. The viewer uses a 2×2 grid when a minute has no HW4 widths and no pillar clips.
+- **HW3 decoded** (recover/HW3, 162 complete minutes): 1280×960 for all 4 cameras. SPS, encoder
+  settings and tags are identical, so nothing in the file names the camera. Telemetry SEI is
+  present (36 fps). The write order was right in all 162 minutes, but live Sentry clips on E: show
+  it can differ (e.g. right_repeater, front, left_repeater, back).
+- **Picture check** (`vision.py`, PyAV; ~35 ms per keyframe): the back camera is a fisheye, so its
+  corners are darkest (corner/centre brightness 0.50 vs 0.85–0.94 for the others; darkest = back
+  in 162/162 minutes, typically at 65 % of the next-darkest). It doesn't depend on paint colour.
+  `finalize` checks complete HW3 minutes that have new clips. On a clear contradiction
+  (ratio ≤ 0.8) the fisheye clip becomes back, and the other inferred cameras become `side`.
+  - **Mirror cue** (user tip: the black underside of the side mirror shows in the repeaters' top
+    corners): left repeater = dark top-left, right = dark top-right. It separates left from right
+    in 149/162 minutes, but the front's top corners vary too much to use it against the front.
+    Not used yet.
+  - Body-colour cues (car side at an image edge) were rejected because they depend on paint colour.
+- **USB drop-outs:** an intermittent `OSError 22` when re-opening the raw volume.
+  `AlignedReader` retries 4× with the volume reopened, and live-file copies retry too
+  (`DriveReadError` with a clear message). Export skips clips already copied with the right size.
+- The `WinError 10054` / ConnectionResetError tracebacks come from the video player cancelling
+  requests (harmless); they are filtered from the `asyncio` logger.
+- `finalize` also renames earlier `side` clips once new or repaired clips complete their
+  camera chain (test library: 328 → 33 `side`). It renames any done clip whose camera changes.
 
 ## Open ideas / not done
 

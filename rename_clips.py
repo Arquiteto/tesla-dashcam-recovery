@@ -9,8 +9,9 @@ in UTC; it is converted to this computer's local time zone (the same local
 time Tesla uses in its own file names). Tesla puts the area in the title tag
 and the street in the comment tag.
 
-Camera: the front camera is the only one recorded at 2896x1876. The car
-writes each minute's six files back to back in CAMERA_ORDER, so a clip that
+Camera: on HW4 the front camera is the only one recorded at 2896x1876 (HW3 has four
+cameras, all the same size). The car
+writes each minute's files back to back in camera order, so a clip that
 starts on the cluster after another one ends is the next camera. With --listing (the output
 of `run.py D: outdir list`) clips that still have a directory entry get their
 exact Tesla name from it.

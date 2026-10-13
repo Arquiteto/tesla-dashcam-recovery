@@ -4,26 +4,59 @@ directory entries, including deleted ones. Based on run.py."""
 import os
 import struct
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 END_OF_CHAIN = 0x0FFFFFF7
 
 
+class DriveReadError(OSError):
+    pass
+
+
 class AlignedReader:
-    """Raw Windows volumes only allow sector-aligned seeks/reads, so round each read out to whole sectors."""
+    """Raw Windows volumes only allow sector-aligned seeks/reads, so round each read out to whole sectors.
+
+    USB drives sometimes drop out for a moment (power saving, a loose connection, another program
+    briefly locking the volume) and a read fails with e.g. "Invalid argument". Such reads are
+    retried a few times with the volume reopened before giving up."""
+
+    RETRIES = 4
 
     def __init__(self, path, align=4096):
-        self.f = open(path, 'rb', buffering=0)
+        self.path = path
         self.align = align
+        self.f = self._open()
+
+    def _open(self):
+        for attempt in range(self.RETRIES + 1):
+            try:
+                return open(self.path, 'rb', buffering=0)
+            except OSError:
+                if attempt == self.RETRIES:
+                    raise DriveReadError('The drive can’t be opened. Check that it is plugged in and try again.')
+                time.sleep(0.5 * (attempt + 1))
 
     def read_at(self, pos, n):
         start = pos - pos % self.align
         end = pos + n
         end += -end % self.align
-        self.f.seek(start)
-        data = self.f.read(end - start)
-        return data[pos - start:pos - start + n]
+        for attempt in range(self.RETRIES + 1):
+            try:
+                self.f.seek(start)
+                data = self.f.read(end - start)
+                return data[pos - start:pos - start + n]
+            except OSError:
+                if attempt == self.RETRIES:
+                    raise DriveReadError('The drive stopped responding. Check the USB connection and try again; '
+                                         'clips copied so far are kept.')
+                time.sleep(0.5 * (attempt + 1))
+                try:
+                    self.f.close()
+                except OSError:
+                    pass
+                self.f = self._open()
 
     def close(self):
         self.f.close()

@@ -2,6 +2,13 @@
 
 const $ = (sel) => document.querySelector(sel);
 const CAMERAS = ['front', 'left_repeater', 'right_repeater', 'back', 'left_pillar', 'right_pillar'];
+// HW3 cars record four cameras (no pillars), all at 1280-ish width; HW4 cars six, with a
+// 2896-px front and 1448-px side cameras.
+const HW3_CAMERAS = CAMERAS.slice(0, 4);
+function isHW3(minute) {
+  const clips = Object.entries(minute.clips);
+  return !clips.some(([cam, c]) => cam.includes('pillar') || c.width === 2896 || c.width === 1448);
+}
 const CAMERA_LABELS = {
   front: 'Front', left_repeater: 'Left repeater', right_repeater: 'Right repeater', back: 'Back',
   left_pillar: 'Left pillar', right_pillar: 'Right pillar', side: 'Side (unknown)',
@@ -9,6 +16,9 @@ const CAMERA_LABELS = {
 const GEARS = ['P', 'D', 'R', 'N'];
 const AUTOPILOT = ['', 'FSD', 'Autosteer', 'TACC'];
 const CLIP_SECONDS = 60;
+// Above this speed the browser can't decode every frame (the 2896-px front camera stalls at 4x),
+// so faster playback jumps from keyframe to keyframe instead (see viewer.tick).
+const NATIVE_MAX_RATE = 2;
 const SESSION_GAP = 5 * 60;   // seconds between clips that start a new recording in the lists
 
 const app = {
@@ -466,6 +476,53 @@ const viewer = {
   index: -1,
   focus: null,      // camera shown large, or null for the grid
   rate: 1,
+  clock: 0,         // playback position (s) in keyframe-stepping mode
+  lastTick: 0,
+  keyframes: new Map(),   // file -> keyframe times
+
+  // Keyframe stepping is used for fast playback and while dragging the seek bar.
+  stepMode() { return this.rate > NATIVE_MAX_RATE || this.scrubbing; },
+
+  // Dragging the seek bar: exact seeks on every move pile up in the decoders (each decodes up to
+  // 18 frames) and freeze the cameras, so show keyframes while dragging and seek exactly on release.
+  scrub(t) {
+    if (!this.scrubbing) {
+      this.scrubbing = true;
+      this.resumeAfterScrub = this.playing;
+      for (const v of this.videos()) v.pause();
+    }
+    this.clock = t;
+  },
+  endScrub() {
+    if (!this.scrubbing) return;
+    this.scrubbing = false;
+    const t = this.clock;
+    if (this.rate <= NATIVE_MAX_RATE) {
+      this.seek(t);
+      if (this.resumeAfterScrub) this.play();
+    }
+  },
+  position() { const m = this.master(); return this.stepMode() ? this.clock : (m ? m.currentTime : 0); },
+
+  async loadKeyframes(file) {
+    if (this.keyframes.has(file)) return;
+    this.keyframes.set(file, null);
+    try { this.keyframes.set(file, await api('/api/keyframes?file=' + encodeURIComponent(file))); } catch (e) { /* exact seeks then */ }
+  },
+
+  setRate(rate) {
+    const wasStep = this.stepMode();
+    const t = this.position();
+    this.rate = rate;
+    for (const v of this.videos()) v.playbackRate = this.stepMode() ? 1 : rate;
+    if (this.stepMode() && !wasStep) {
+      this.clock = t;
+      for (const v of this.videos()) v.pause();
+    } else if (!this.stepMode() && wasStep) {
+      this.seek(t);
+      if (this.playing) this.play();
+    }
+  },
   playing: false,
   telemetry: null,
   telemetryFile: null,
@@ -507,11 +564,12 @@ const viewer = {
       for (const m of s.items) {
         const i = this.minutes.indexOf(m);
         const n = Object.keys(m.clips).length;
+        const total = isHW3(m) ? HW3_CAMERAS.length : CAMERAS.length;
         const row = el('div', { class: 'minute', 'data-i': i, title: [m.title, m.comment].filter(Boolean).join(', '),
           onclick: (ev) => ev.ctrlKey || ev.shiftKey ? this.mark(i, ev.shiftKey) : this.open(i, this.playing) },
         el('span', { class: 't' }, fmtTime(m.t)),
         el('span', { class: 'loc' }, m.comment || m.title || ''),
-        el('span', { class: 'n' }, n < 6 ? `${n}/6` : ''));
+        el('span', { class: 'n' }, n < total ? `${n}/${total}` : ''));
         list.append(row);
       }
     }
@@ -540,23 +598,29 @@ const viewer = {
       const video = el('video', { muted: '', playsinline: '', preload: 'auto' });
       video.muted = true;
       const tile = el('div', { class: 'tile', 'data-cam': cam, onclick: () => this.setFocus(this.focus === cam ? null : cam) },
-        video, el('div', { class: 'missing hidden' }, 'no clip'), el('div', { class: 'label' }, CAMERA_LABELS[cam]));
+        video, el('div', { class: 'missing hidden' }, 'no clip'), el('div', { class: 'label' }, CAMERA_LABELS[cam]),
+        el('div', { class: 'ended hidden' }, 'Recovered footage of this camera ends here'));
       box.append(tile);
       this.tiles[cam] = { tile, video };
       video.sync = { lastSeek: 0, lastTime: -1, stuckSince: 0, reloads: 0 };
-      video.addEventListener('ended', () => { if (video === this.master()) this.next(); });
+      video.addEventListener('ended', () => { if (video === this.master() && video.ended && !this.stepMode()) this.next(); });
       video.addEventListener('error', () => this.recover(video));
     }
     this.applyLayout();
   },
 
+  cameras() { return this.hw3 ? HW3_CAMERAS : CAMERAS; },
+
   applyLayout() {
     const box = $('#videos');
+    if (this.focus && !this.cameras().includes(this.focus)) this.focus = null;
     box.classList.toggle('grid', !this.focus);
     box.classList.toggle('focus', !!this.focus);
+    box.classList.toggle('hw3', !!this.hw3);
     let t = 1;
     for (const cam of CAMERAS) {
       const { tile } = this.tiles[cam];
+      tile.classList.toggle('hidden', !this.cameras().includes(cam));
       tile.style.gridArea = this.focus ? (cam === this.focus ? 'main' : 't' + t++) : cam;
     }
   },
@@ -584,25 +648,29 @@ const viewer = {
     if (i < 0 || i >= this.minutes.length) return;
     this.index = i;
     const m = this.minutes[i];
+    this.hw3 = isHW3(m);
+    this.applyLayout();
     // Clips of unknown camera ("side") fill empty side tiles so nothing is hidden.
     const extra = Object.keys(m.clips).filter((k) => !CAMERAS.includes(k)).map((k) => m.clips[k]);
     for (const cam of CAMERAS) {
       const { tile, video } = this.tiles[cam];
       let clip = m.clips[cam];
       let label = CAMERA_LABELS[cam];
-      if (!clip && cam !== 'front' && extra.length) { clip = extra.shift(); label = CAMERA_LABELS.side; }
+      if (!clip && cam !== 'front' && extra.length && this.cameras().includes(cam)) { clip = extra.shift(); label = CAMERA_LABELS.side; }
       tile.querySelector('.label').textContent = label;
       tile.querySelector('.missing').textContent = 'no clip';
       tile.querySelector('.missing').classList.toggle('hidden', !!clip);
       const src = clip ? '/media/' + clip.file.split('/').map(encodeURIComponent).join('/') : '';
+      if (clip) { video.dataset.file = clip.file; this.loadKeyframes(clip.file); }
       if (video.dataset.src !== src) {
         video.dataset.src = src;
         video.sync = { lastSeek: 0, lastTime: -1, stuckSince: 0, reloads: 0 };
         if (src) video.src = src; else video.removeAttribute('src');
         video.load();
       }
-      video.playbackRate = this.rate;
+      video.playbackRate = this.stepMode() ? 1 : this.rate;
     }
+    this.clock = 0;
     document.querySelectorAll('.clip-list .minute').forEach((r) => {
       const cur = +r.dataset.i === i;
       r.classList.toggle('current', cur);
@@ -620,11 +688,13 @@ const viewer = {
   play() {
     this.playing = true;
     $('#play-btn').textContent = '⏸';
+    this.lastTick = performance.now();
+    if (this.stepMode()) return;
     for (const v of this.videos()) if (!v.sync.dead) v.play().catch(() => {});
   },
 
-  // A video that errored or stopped advancing: reload it at the current time (twice at most,
-  // then mark the tile as unplayable so the other cameras carry on).
+  // A video that reported an error: reload it at the current time (twice at most, then mark the
+  // tile as unplayable so the other cameras carry on).
   recover(video) {
     const s = video.sync;
     const tile = video.parentElement;
@@ -637,13 +707,12 @@ const viewer = {
     }
     s.reloads++;
     s.stuckSince = 0;
-    const master = this.master();
-    const t = master && master !== video ? master.currentTime : video.currentTime;
+    const t = this.position();
     video.load();
     video.addEventListener('loadedmetadata', () => {
       video.currentTime = Math.min(t, video.duration || t);
-      video.playbackRate = this.rate;
-      if (this.playing) video.play().catch(() => {});
+      video.playbackRate = this.stepMode() ? 1 : this.rate;
+      if (this.playing && !this.stepMode()) video.play().catch(() => {});
     }, { once: true });
   },
   pause() {
@@ -652,6 +721,7 @@ const viewer = {
     for (const v of this.videos()) v.pause();
   },
   seek(t) {
+    this.clock = t;
     for (const v of this.videos()) {
       v.currentTime = Math.min(t, (v.duration || t));
       v.sync.lastSeek = performance.now();
@@ -686,13 +756,43 @@ const viewer = {
     this.watchdog(v, now);
   },
 
-  // A playing video whose time hasn't moved for 2.5 s is stuck (decoder hiccup): reload it.
+  // A playing video whose time hasn't moved for 2 s has a stalled decoder (it fell behind).
+  // Re-seeking to where it is flushes the decoder; reloading would only add more work.
   watchdog(v, now) {
     const s = v.sync;
     if (!this.playing || v.paused || v.ended || v.seeking) { s.stuckSince = 0; s.lastTime = v.currentTime; return; }
     if (v.currentTime !== s.lastTime) { s.lastTime = v.currentTime; s.stuckSince = 0; return; }
     if (!s.stuckSince) s.stuckSince = now;
-    else if (now - s.stuckSince > 2500) this.recover(v);
+    else if (now - s.stuckSince > 2000) {
+      s.stuckSince = 0;
+      v.currentTime = v.currentTime + 0.001;
+    }
+  },
+
+  // Fast playback: the videos stay paused; the clock runs at the chosen speed and each camera
+  // shows the keyframe at or before it. A keyframe needs no other frame decoded, so this stays
+  // light even at 4x, unlike native playback which must decode every frame.
+  stepTick(master, now) {
+    const dt = Math.min(0.25, (now - this.lastTick) / 1000);
+    this.lastTick = now;
+    const dur = master.duration || 0;
+    if (this.playing && !this.scrubbing) {
+      this.clock += dt * this.rate;
+      if (dur && this.clock >= dur - 0.05) { this.next(); return; }
+    }
+    for (const v of this.videos()) {
+      if (v.sync.dead || v.readyState < 1 || v.seeking) continue;
+      if (!v.paused) v.pause();
+      const keys = this.keyframes.get(v.dataset.file);
+      let target = this.clock;
+      if (keys && keys.length) {
+        let lo = 0, hi = keys.length - 1;
+        while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (keys[mid] <= this.clock) lo = mid; else hi = mid - 1; }
+        target = keys[lo];
+      }
+      target = Math.min(target, (v.duration || target) - 0.05);
+      if (Math.abs(v.currentTime - target) > 0.001) v.currentTime = target;
+    }
   },
 
   // Keep the other cameras on the master's time and update the clock / overlay.
@@ -702,11 +802,24 @@ const viewer = {
     const master = this.master();
     const m = this.minutes[this.index];
     if (master && m) {
-      const t = master.currentTime;
       const now = performance.now();
-      for (const v of this.videos()) {
-        if (v === master) this.watchdog(v, now);
-        else this.syncVideo(v, master, t, now);
+      if (this.stepMode()) {
+        this.stepTick(master, now);
+      } else {
+        this.lastTick = now;
+        for (const v of this.videos()) {
+          if (v === master) this.watchdog(v, now);
+          else this.syncVideo(v, master, master.currentTime, now);
+        }
+      }
+      if (this.minutes[this.index] !== m) return;   // stepTick moved on to the next minute
+      const t = this.position();
+      // A camera whose clip is shorter than the minute (usually a repaired clip: only its first
+      // part survived) would otherwise just sit on its last picture and look frozen.
+      for (const c of CAMERAS) {
+        const v = this.tiles[c].video;
+        const over = !!v.dataset.src && v.duration > 0 && t > v.duration + 0.2;
+        this.tiles[c].tile.querySelector('.ended').classList.toggle('hidden', !over);
       }
       const seek = $('#seek');
       if (master.duration) seek.max = master.duration;
@@ -733,6 +846,10 @@ const viewer = {
     const on = $('#tm-toggle').checked && d && d.t.length;
     box.classList.toggle('hidden', !on);
     if (!on) return;
+    // Sit just above the controls (they wrap to two rows in a narrow window), and above the
+    // thumbnail row when one camera is enlarged.
+    const thumbs = this.focus ? $('#videos .tile:not(.hidden):not([style*="main"])') : null;
+    box.style.bottom = ($('.controls').offsetHeight + (thumbs ? thumbs.offsetHeight : 0) + 12) + 'px';
     // Last frame at or before t.
     let lo = 0, hi = d.t.length - 1;
     while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (d.t[mid] <= t) lo = mid; else hi = mid - 1; }
@@ -755,9 +872,9 @@ const viewer = {
 $('#play-btn').addEventListener('click', () => viewer.playing ? viewer.pause() : viewer.play());
 $('#next-btn').addEventListener('click', () => viewer.next());
 $('#prev-btn').addEventListener('click', () => viewer.prev());
-$('#seek').addEventListener('input', (e) => { viewer.seeking = true; viewer.seek(+e.target.value); });
-$('#seek').addEventListener('change', () => { viewer.seeking = false; });
-$('#speed').addEventListener('change', (e) => { viewer.rate = +e.target.value; viewer.videos().forEach((v) => { v.playbackRate = viewer.rate; }); });
+$('#seek').addEventListener('input', (e) => { viewer.seeking = true; viewer.scrub(+e.target.value); });
+$('#seek').addEventListener('change', () => { viewer.seeking = false; viewer.endScrub(); });
+$('#speed').addEventListener('change', (e) => viewer.setRate(+e.target.value));
 $('#layout-btn').addEventListener('click', () => viewer.setFocus(viewer.focus ? null : 'front'));
 $('#tm-toggle').addEventListener('change', () => { const m = viewer.minutes[viewer.index]; if (m) viewer.loadTelemetry(m); });
 $('#save-btn').addEventListener('click', async () => {
@@ -774,12 +891,12 @@ app.jobHandlers['save:done'] = (job) => toast(job.status === 'done' ? `Saved ${j
 document.addEventListener('keydown', (e) => {
   if (app.step !== 'viewer' || e.target.matches('input, select, textarea')) return;
   if (e.code === 'Space') { e.preventDefault(); viewer.playing ? viewer.pause() : viewer.play(); }
-  if (e.code === 'ArrowRight') viewer.seek(viewer.master().currentTime + 5);
-  if (e.code === 'ArrowLeft') viewer.seek(Math.max(0, viewer.master().currentTime - 5));
+  if (e.code === 'ArrowRight') viewer.seek(viewer.position() + 5);
+  if (e.code === 'ArrowLeft') viewer.seek(Math.max(0, viewer.position() - 5));
   if (e.code === 'PageDown' || e.code === 'ArrowDown') { e.preventDefault(); viewer.next(); }
   if (e.code === 'PageUp' || e.code === 'ArrowUp') { e.preventDefault(); viewer.prev(); }
   const n = parseInt(e.key, 10);
-  if (n >= 1 && n <= 6) viewer.setFocus(CAMERAS[n - 1]);
+  if (n >= 1 && n <= viewer.cameras().length) viewer.setFocus(viewer.cameras()[n - 1]);
   if (e.key === '0' || e.key === 'Escape') viewer.setFocus(null);
 });
 

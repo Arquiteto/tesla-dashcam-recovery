@@ -12,8 +12,8 @@ import requests
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import tesla_dashcam_decrypt as tdd  # noqa: E402
 
-from . import repair
-from .naming import assignCameras, clipName, readMetadata
+from . import repair, vision
+from .naming import FRONT_WIDTH, HW4_SIDE_WIDTH, assignCameras, clipName, readMetadata
 from .scan import parse_name
 
 BATCH_SIZE = 20
@@ -112,15 +112,24 @@ def finalize(lib, progress, keep_encrypted=True):
     listed = {c['cluster']: parse_name(c['entry']['name'])[1] for c in clips if c['entry'].get('name')}
     listed = {k: v for k, v in listed.items() if v}
     for c in clips:
-        if c['entry'].get('status') == 'ok' and c['entry'].get('camera'):
+        # Known cameras of clips done earlier anchor the chain (but not 'side' = unknown).
+        if c['entry'].get('status') == 'ok' and c['entry'].get('camera') not in (None, 'side'):
             listed.setdefault(c['cluster'], c['entry']['camera'])
     assignCameras(clips, listed, lib.cluster_size)
+    _check_hw3_back_camera(lib, clips, listed, progress)
 
     taken = {e['file'] for e in lib.entries.values() if e.get('status') == 'ok'}
     for c in clips:
         entry = c['entry']
-        if entry.get('status') != 'raw':
+        relabel = (entry.get('status') == 'ok' and entry.get('camera') != c['camera']
+                   and entry.get('source') != 'folder')
+        if entry.get('status') != 'raw' and not relabel:
             continue
+        if relabel:
+            # New information about this clip's camera (newly decrypted or repaired clips completed
+            # the chain of adjacent files, or the picture check corrected it): rename it.
+            taken.discard(entry['file'])
+            entry['status'] = 'raw'
         entry['camera'] = c['camera']
         recorded = datetime.datetime.fromtimestamp(entry['recorded_utc'], datetime.timezone.utc)
         extra = (entry['title'], entry['comment'], 'repaired' if entry.get('repaired') else '')
@@ -135,6 +144,31 @@ def finalize(lib, progress, keep_encrypted=True):
                 os.remove(enc)
     lib.save()
     progress('Done', len(raw), len(raw))
+
+
+def _check_hw3_back_camera(lib, clips, listed, progress):
+    """HW3 cameras are only told apart by the order the car writes them in, which is occasionally
+    different. The back camera's fisheye picture is recognisable, so check it on complete HW3
+    minutes that have new clips. If the picture clearly contradicts the order, the order was wrong:
+    the fisheye clip becomes the back camera, and the other inferred cameras become 'side'
+    (unknown), since a wrong name is worse than none."""
+    groups = {}
+    for c in clips:
+        groups.setdefault(c['recorded'], []).append(c)
+    todo = [g for g in groups.values()
+            if len(g) == 4 and any(c['entry'].get('status') == 'raw' for c in g)
+            and not any(c['width'] in (FRONT_WIDTH, HW4_SIDE_WIDTH) for c in g)
+            and not all(c['cluster'] in listed for c in g)]
+    for i, group in enumerate(todo):
+        progress('Checking camera positions', i, len(todo))
+        back = vision.find_back_camera([os.path.join(lib.folder, c['entry']['file']) for c in group])
+        if back is None or group[back]['camera'] == 'back':
+            continue
+        for j, c in enumerate(group):
+            if j == back:
+                c['camera'] = 'back'
+            elif c['cluster'] not in listed:
+                c['camera'] = 'side'
 
 
 def _try_repair(lib, entry, path):
