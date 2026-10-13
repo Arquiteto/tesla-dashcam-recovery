@@ -3,10 +3,11 @@
 import json
 import os
 import shutil
+import time
 
 from .library import Library
 from .scan import CLIP_SECONDS
-from .volume import Volume, from_runs
+from .volume import DriveReadError, Volume, from_runs
 
 
 def select(clips, start_utc=None, end_utc=None):
@@ -21,6 +22,19 @@ def select(clips, start_utc=None, end_utc=None):
                 (start_utc is None or c['start_utc'] + CLIP_SECONDS >= start_utc):
             out.append(c)
     return out
+
+
+def _copy_with_retries(src, dst, retries=4):
+    """Copy a file from the USB drive, riding out short drop-outs of the drive."""
+    for attempt in range(retries + 1):
+        try:
+            shutil.copyfile(src, dst)
+            return
+        except OSError:
+            if attempt == retries:
+                raise DriveReadError('The drive stopped responding while copying %s. Check the USB '
+                                     'connection and try again; clips copied so far are kept.' % os.path.basename(src))
+            time.sleep(0.5 * (attempt + 1))
 
 
 def encrypted_name(clip):
@@ -41,16 +55,19 @@ def export(drive, scan, clips, out_dir, progress, cancelled=lambda: False):
             if cancelled():
                 raise InterruptedError('cancelled')
             entry = lib.get(clip['id'])
-            if entry and entry.get('status') in ('decrypted', 'unplayable', 'copied'):
-                done += clip['size']
-                continue
             name = encrypted_name(clip)
             dest = os.path.join(enc_dir, name)
+            # Already handled in an earlier run (also after an interrupted copy): don't copy again.
+            copied = (entry and entry.get('encrypted_file') == name and os.path.isfile(dest)
+                      and os.path.getsize(dest) == clip['size'])
+            if entry and (entry.get('status') in ('ok', 'raw', 'unplayable') or copied):
+                done += clip['size']
+                continue
             progress('Copying %s' % (clip['name'] or 'deleted clip %s' % clip['id']), done, total)
             if clip['source'] == 'live':
                 # Through the file system, so fragmented files come out intact.
                 src = drive.rstrip('\\/') + clip['path'].replace('/', '\\')
-                shutil.copyfile(src, dest + '.part')
+                _copy_with_retries(src, dest + '.part')
             else:
                 if vol is None:
                     vol = Volume(drive)

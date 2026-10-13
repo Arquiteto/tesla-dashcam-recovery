@@ -5,6 +5,8 @@ import ctypes
 import json
 import os
 import string
+import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -15,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import auth, decrypt, export, scan
 from .library import Library
-from .telemetry import read_telemetry
+from .telemetry import keyframe_times, read_telemetry
 
 STATIC = os.path.join(os.path.dirname(__file__), 'static')
 SETTINGS = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'TeslaRecover', 'settings.json')
@@ -92,13 +94,14 @@ state = State()
 app = FastAPI()
 
 
-@app.middleware('http')
-async def no_cache_frontend(request, call_next):
-    # The page and its scripts change with app updates; always revalidate them.
-    response = await call_next(request)
-    if not request.url.path.startswith(('/media/', '/api/')):
+class FrontendFiles(StaticFiles):
+    """The page and its scripts change with app updates; always revalidate them. (Done here rather
+    than in an HTTP middleware, which would also wrap - and slow down - every video stream.)"""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
         response.headers['Cache-Control'] = 'no-cache'
-    return response
+        return response
 
 
 def list_drives():
@@ -134,14 +137,19 @@ def pick_folder(initial=None):
         import webview
         result = state.window.create_file_dialog(webview.FileDialog.FOLDER, directory=initial or '')
         return result[0] if result else None
-    import tkinter
-    from tkinter import filedialog
-    root = tkinter.Tk()
-    root.withdraw()
-    root.attributes('-topmost', True)
-    path = filedialog.askdirectory(initialdir=initial or None)
-    root.destroy()
-    return path or None
+    # Browser mode: Tk must own its thread's main loop, and a Tk crash would take the whole server
+    # down, so show the dialog from a separate process.
+    script = '\n'.join([
+        'import sys, tkinter',
+        'from tkinter import filedialog',
+        'root = tkinter.Tk()',
+        'root.withdraw()',
+        'root.attributes("-topmost", True)',
+        'print(filedialog.askdirectory(initialdir=sys.argv[1] or None) or "")',
+    ])
+    result = subprocess.run([sys.executable, '-c', script, initial or ''], capture_output=True, text=True,
+                            encoding='utf-8')
+    return result.stdout.strip() or None
 
 
 def clip_summary(c):
@@ -324,6 +332,21 @@ def media(name: str):
     return FileResponse(_library_file(name), media_type='video/mp4')
 
 
+_keyframes = {}
+
+
+@app.get('/api/keyframes')
+def keyframes(file: str):
+    path = _library_file(file)
+    key = (path, os.path.getmtime(path))
+    if key not in _keyframes:
+        try:
+            _keyframes[key] = keyframe_times(path)
+        except Exception:
+            _keyframes[key] = []
+    return _keyframes[key]
+
+
 @app.get('/api/telemetry')
 def telemetry(file: str):
     path = _library_file(file)
@@ -364,4 +387,4 @@ def open_folder(folder: str = Body(None, embed=True)):
     return {'ok': True}
 
 
-app.mount('/', StaticFiles(directory=STATIC, html=True), name='static')
+app.mount('/', FrontendFiles(directory=STATIC, html=True), name='static')

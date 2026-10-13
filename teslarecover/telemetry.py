@@ -192,3 +192,16 @@ def read_telemetry(path):
         result['frames'] = len(samples)
         result['fps'] = round((len(samples) - 1) / duration, 3) if duration else 0
         return result
+
+
+def keyframe_times(path):
+    """Presentation times (seconds) of the video's keyframes, from the stss table. Fast playback
+    jumps between these, since showing a keyframe needs no other frame decoded."""
+    with open(path, 'rb') as f:
+        f.seek(0, 2)
+        end = f.tell()
+        stbl, timescale = _video_stbl(f, end)
+        samples = _samples(f, stbl)
+        stss = findBox(f, stbl[0], stbl[1], [b'stss'])
+        numbers = [n[0] for n in _table(f, stss, '>I')] if stss else range(1, len(samples) + 1)
+        return [round(samples[n - 1][2] / timescale, 4) for n in numbers if 0 < n <= len(samples)]

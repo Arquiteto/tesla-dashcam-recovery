@@ -4,9 +4,10 @@ The recording start comes from moov/mvhd creation_time, which Tesla stores in UT
 names use this computer's local time zone (the same local time Tesla uses in its own
 file names). Tesla puts the area in the title tag and the street in the comment tag.
 
-Camera: the front camera is the only one recorded at 2896x1876. The car writes each
-minute's six files back to back in CAMERA_ORDER, so a clip that starts on the cluster
-after another one ends is the next camera.
+Camera: HW4 cars record six cameras; the front is the only one at 2896x1876 (the others are
+1448x938). HW3 cars record four cameras (no pillars), all at the same resolution. Either way the
+car writes each minute's files back to back in CAMERA_ORDER (HW3: HW3_ORDER), so a clip that
+starts on the cluster after another one ends is the next camera.
 """
 
 import collections
@@ -16,9 +17,11 @@ import struct
 
 MP4_EPOCH = datetime.datetime(1904, 1, 1, tzinfo=datetime.timezone.utc)
 INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-FRONT_WIDTH = 2896
+FRONT_WIDTH = 2896           # HW4 front camera
+HW4_SIDE_WIDTH = 1448
 SIDE_CAMERAS = ('left_repeater', 'right_repeater', 'back', 'left_pillar', 'right_pillar')
-CAMERA_ORDER = ('front',) + SIDE_CAMERAS
+CAMERA_ORDER = ('front',) + SIDE_CAMERAS          # HW4: six cameras
+HW3_ORDER = ('front', 'left_repeater', 'right_repeater', 'back')
 ENC_HEADER_SIZE = 0x2000
 ENC_PAGE_SIZE = 0x1000
 
@@ -130,8 +133,11 @@ def assignCameras(clips, listed, clusterSize=131072):
             clip['camera'] = listed.get(clip['cluster'])
             if clip['camera'] is None and clip['width'] == FRONT_WIDTH:
                 clip['camera'] = 'front'
+        hw4 = any(c['width'] in (FRONT_WIDTH, HW4_SIDE_WIDTH) or c['camera'] in ('left_pillar', 'right_pillar')
+                  for c in group)
+        order = CAMERA_ORDER if hw4 else HW3_ORDER
 
-        # The car writes a minute's files back to back in CAMERA_ORDER, so a clip that
+        # The car writes a minute's files back to back in camera order, so a clip that
         # starts right where a known camera's clip ends is the next camera (and vice versa).
         byStart = {clip['cluster']: clip for clip in group}
         byEnd = {endOf(clip): clip for clip in group}
@@ -139,21 +145,29 @@ def assignCameras(clips, listed, clusterSize=131072):
         while changed:
             changed = False
             for clip in group:
-                if clip['camera'] not in CAMERA_ORDER:
+                if clip['camera'] not in order:
                     continue
-                index = CAMERA_ORDER.index(clip['camera'])
+                index = order.index(clip['camera'])
                 neighbours = ((byStart.get(endOf(clip)), index + 1), (byEnd.get(clip['cluster']), index - 1))
                 for neighbour, neighbourIndex in neighbours:
-                    if neighbour and neighbour['camera'] is None and 0 <= neighbourIndex < len(CAMERA_ORDER):
-                        neighbour['camera'] = CAMERA_ORDER[neighbourIndex]
+                    if neighbour and neighbour['camera'] is None and 0 <= neighbourIndex < len(order):
+                        neighbour['camera'] = order[neighbourIndex]
                         changed = True
 
-        # A fragmented clip breaks the chain, but if all five side cameras are here their
-        # order on disk still tells them apart.
-        side = sorted([c for c in group if c['camera'] != 'front'], key=lambda c: c['cluster'])
-        if len(side) == len(SIDE_CAMERAS):
-            for clip, camera in zip(side, SIDE_CAMERAS):
-                if clip['camera'] is None:
+        # A fragmented clip breaks the chain, but if the whole minute is here, the order on disk
+        # still tells the cameras apart. (HW4: the front is known by its width, so five side
+        # cameras are enough. HW3: no camera stands out, so all four are needed.)
+        if hw4:
+            side = sorted([c for c in group if c['camera'] != 'front'], key=lambda c: c['cluster'])
+            if len(side) == len(SIDE_CAMERAS):
+                for clip, camera in zip(side, SIDE_CAMERAS):
+                    if clip['camera'] is None:
+                        clip['camera'] = camera
+        elif len(group) == len(HW3_ORDER):
+            ordered = sorted(group, key=lambda c: c['cluster'])
+            known = [(c['camera'], camera) for c, camera in zip(ordered, HW3_ORDER) if c['camera']]
+            if all(a == b for a, b in known):
+                for clip, camera in zip(ordered, HW3_ORDER):
                     clip['camera'] = camera
 
         for clip in group:

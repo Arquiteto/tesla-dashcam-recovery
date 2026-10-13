@@ -126,6 +126,12 @@ details.manual summary { cursor: pointer; }
   grid-template-columns: repeat(5, 1fr); grid-template-rows: 1fr 120px;
   grid-template-areas: "main main main main main" "t1 t2 t3 t4 t5";
 }
+/* HW3: four cameras */
+.videos.grid.hw3 {
+  grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(2, 1fr);
+  grid-template-areas: "front back" "left_repeater right_repeater";
+}
+.videos.focus.hw3 { grid-template-columns: repeat(3, 1fr); grid-template-areas: "main main main" "t1 t2 t3"; }
 .tile { position: relative; min-width: 0; min-height: 0; background: #050505; cursor: pointer; overflow: hidden; }
 .tile video { width: 100%; height: 100%; object-fit: contain; display: block; }
 .tile .label {
@@ -133,6 +139,10 @@ details.manual summary { cursor: pointer; }
   padding: 1px 6px; border-radius: 4px; pointer-events: none;
 }
 .tile .missing { position: absolute; inset: 0; display: grid; place-items: center; color: #555; font-size: 12px; }
+.tile .ended {
+  position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 8px;
+  background: rgba(0, 0, 0, .55); color: #ddd; font-size: 12px; pointer-events: none;
+}
 .tile:hover { outline: 1px solid var(--accent); outline-offset: -1px; }
 
 .controls {
@@ -166,4 +176,3 @@ details.manual summary { cursor: pointer; }
   position: fixed; right: 20px; bottom: 20px; background: var(--panel-2); border: 1px solid var(--line);
   padding: 10px 16px; border-radius: 8px; max-width: 420px; z-index: 10;
 }
-.player:has(.videos.focus) .telemetry { bottom: 190px; }
